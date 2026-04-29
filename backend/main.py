@@ -41,8 +41,18 @@ def clean_nan_values(obj):
         if np.isnan(obj) or np.isinf(obj):
             return None
         return float(obj)
+    elif isinstance(obj, (pd.Timestamp, datetime, np.datetime64)):
+        if isinstance(obj, np.datetime64):
+            return pd.Timestamp(obj).isoformat()
+        return obj.isoformat()
+    elif isinstance(obj, pd.Timedelta):
+        return obj.total_seconds()
     elif pd.isna(obj):
         return None
+    elif isinstance(obj, np.ndarray):
+        return clean_nan_values(obj.tolist())
+    elif hasattr(obj, '__dict__'):
+        return clean_nan_values(vars(obj))
     return obj
 
 def safe_mean(series, default=0.5):
