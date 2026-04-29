@@ -26,6 +26,31 @@ OUTPUT_DIR = "outputs"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+def clean_nan_values(obj):
+    if isinstance(obj, dict):
+        return {k: clean_nan_values(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [clean_nan_values(v) for v in obj]
+    elif isinstance(obj, float):
+        if np.isnan(obj) or np.isinf(obj):
+            return None
+        return obj
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        if np.isnan(obj) or np.isinf(obj):
+            return None
+        return float(obj)
+    elif pd.isna(obj):
+        return None
+    return obj
+
+def safe_mean(series, default=0.5):
+    result = series.mean()
+    if pd.isna(result) or np.isinf(result):
+        return default
+    return float(result)
+
 class LLMConfig(BaseModel):
     base_url: str
     api_key: str
@@ -233,6 +258,8 @@ def segment_users(df: pd.DataFrame) -> List[Dict[str, Any]]:
         (df['churn_risk_score'] >= 0.6)
     ].to_dict('records')
 
+    high_value_at_risk = clean_nan_values(high_value_at_risk)
+
     segments.append({
         'id': 'high_value_at_risk',
         'name': '高价值高风险用户',
@@ -246,6 +273,8 @@ def segment_users(df: pd.DataFrame) -> List[Dict[str, Any]]:
         (df.get('days_since_last_activity', 30) > 60) &
         (df['churn_risk_score'] >= 0.4)
     ].to_dict('records')
+
+    silent_users = clean_nan_values(silent_users)
 
     segments.append({
         'id': 'silent_users',
@@ -261,6 +290,8 @@ def segment_users(df: pd.DataFrame) -> List[Dict[str, Any]]:
         (df.get('payment_health_score', 1) < 0.5)
     ].to_dict('records')
 
+    payment_issues = clean_nan_values(payment_issues)
+
     segments.append({
         'id': 'payment_issues',
         'name': '支付问题用户',
@@ -274,6 +305,8 @@ def segment_users(df: pd.DataFrame) -> List[Dict[str, Any]]:
         (df.get('ticket_risk_score', 0) > 0.6)
     ].to_dict('records')
 
+    support_heavy = clean_nan_values(support_heavy)
+
     segments.append({
         'id': 'support_heavy',
         'name': '高频支持用户',
@@ -286,6 +319,8 @@ def segment_users(df: pd.DataFrame) -> List[Dict[str, Any]]:
     low_risk = df[
         (df['churn_risk_score'] < 0.2)
     ].to_dict('records')
+
+    low_risk = clean_nan_values(low_risk)
 
     segments.append({
         'id': 'low_risk',
@@ -339,6 +374,10 @@ async def analyze_data(task_id: str):
 
     high_risk = df[df['risk_level'].isin(['high', 'critical'])].to_dict('records')
 
+    silent_users_count = int(len(df[df.get('days_since_last_activity', pd.Series([30]*len(df))) > 60]))
+    payment_issues_count = int(len(df[df.get('payment_health_score', pd.Series([1.0]*len(df))) < 0.7]))
+    high_ticket_users_count = int(len(df[df.get('ticket_risk_score', pd.Series([0.0]*len(df))) > 0.5]))
+
     result = {
         "task_id": task_id,
         "total_users": len(df),
@@ -347,10 +386,10 @@ async def analyze_data(task_id: str):
             "medium_risk_count": int(len(df[df['risk_level'] == 'medium'])),
             "high_risk_count": int(len(df[df['risk_level'] == 'high'])),
             "critical_risk_count": int(len(df[df['risk_level'] == 'critical'])),
-            "avg_churn_risk": float(df['churn_risk_score'].mean()),
-            "silent_users_count": int(len(df[df.get('days_since_last_activity', 30) > 60])),
-            "payment_issues_count": int(len(df[df.get('payment_health_score', 1) < 0.7])),
-            "high_ticket_users_count": int(len(df[df.get('ticket_risk_score', 0) > 0.5]))
+            "avg_churn_risk": safe_mean(df['churn_risk_score'], 0.5),
+            "silent_users_count": silent_users_count,
+            "payment_issues_count": payment_issues_count,
+            "high_ticket_users_count": high_ticket_users_count
         },
         "heatmap_data": heatmap['matrix'],
         "heatmap_labels": {
@@ -361,6 +400,8 @@ async def analyze_data(task_id: str):
         "high_risk_users": high_risk,
         "generated_at": datetime.now().isoformat()
     }
+
+    result = clean_nan_values(result)
 
     output_path = os.path.join(OUTPUT_DIR, f"{task_id}_analysis.json")
     with open(output_path, 'w', encoding='utf-8') as f:
